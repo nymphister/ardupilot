@@ -259,8 +259,7 @@ include AP_Button/AP_Button.h
 singleton AP_Button alias button
 singleton AP_Button method get_button_state boolean uint8_t 1 AP_BUTTON_NUM_PINS
 
-//  RoboMark changes, 20200801, nymphister
+--  RoboMark changes, 20200801, nymphister
 include AP_RSSI/AP_RSSI.h
 singleton AP_RSSI alias rssi
 singleton AP_RSSI method read_receiver_rssi float 
-
