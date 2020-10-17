@@ -3,9 +3,7 @@
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 #include <AP_AHRS/AP_AHRS.h>
-#include <AP_Vehicle/AP_Vehicle.h>
 #include <GCS_MAVLink/GCS.h>
-#include <AP_GPS/AP_GPS.h>
 
 extern const AP_HAL::HAL& hal;
 
@@ -110,6 +108,7 @@ void NavEKF3_core::setWindMagStateLearningMode()
     if (!inhibitMagStates && setMagInhibit) {
         inhibitMagStates = true;
         updateStateIndexLim();
+        // variances will be reset in CovariancePrediction
     } else if (inhibitMagStates && !setMagInhibit) {
         inhibitMagStates = false;
         updateStateIndexLim();
@@ -123,7 +122,7 @@ void NavEKF3_core::setWindMagStateLearningMode()
             P[21][21] = bodyMagFieldVar.z;
         } else {
             // set the variances equal to the observation variances
-            for (uint8_t index=18; index<=21; index++) {
+            for (uint8_t index=16; index<=21; index++) {
                 P[index][index] = sq(frontend->_magNoise);
             }
 
@@ -166,6 +165,7 @@ void NavEKF3_core::setWindMagStateLearningMode()
     if (onGround) {
         finalInflightYawInit = false;
         finalInflightMagInit = false;
+        magFieldLearned = false;
     }
 
     updateStateIndexLim();
@@ -197,6 +197,9 @@ void NavEKF3_core::updateStateIndexLim()
 // Set inertial navigation aiding mode
 void NavEKF3_core::setAidingMode()
 {
+    resetDataSource posResetSource = resetDataSource::DEFAULT;
+    resetDataSource velResetSource = resetDataSource::DEFAULT;
+
     // Save the previous status so we can detect when it has changed
     PV_AidingModePrev = PV_AidingMode;
 
@@ -224,7 +227,7 @@ void NavEKF3_core::setAidingMode()
             bool bodyOdmFusionTimeout = ((imuSampleTime_ms - prevBodyVelFuseTime_ms) > 5000);
             // Enable switch to absolute position mode if GPS or range beacon data is available
             // If GPS or range beacons data is not available and flow fusion has timed out, then fall-back to no-aiding
-            if(readyToUseGPS() || readyToUseRangeBeacon()) {
+            if (readyToUseGPS() || readyToUseRangeBeacon() || readyToUseExtNav()) {
                 PV_AidingMode = AID_ABSOLUTE;
             } else if (flowFusionTimeout && bodyOdmFusionTimeout) {
                 PV_AidingMode = AID_NONE;
@@ -325,7 +328,7 @@ void NavEKF3_core::setAidingMode()
             // Reset the normalised innovation to avoid false failing bad fusion tests
             velTestRatio = 0.0f;
             posTestRatio = 0.0f;
-             // store the current position to be used to keep reporting the last known position
+            // store the current position to be used to keep reporting the last known position
             lastKnownPositionNE.x = stateStruct.position.x;
             lastKnownPositionNE.y = stateStruct.position.y;
             // initialise filtered altitude used to provide a takeoff reference to current baro on disarm
@@ -357,26 +360,23 @@ void NavEKF3_core::setAidingMode()
         case AID_ABSOLUTE:
             if (readyToUseGPS()) {
                 // We are commencing aiding using GPS - this is the preferred method
-                posResetSource = GPS;
-                velResetSource = GPS;
+                posResetSource = resetDataSource::GPS;
+                velResetSource = resetDataSource::GPS;
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u is using GPS",(unsigned)imu_index);
             } else if (readyToUseRangeBeacon()) {
                 // We are commencing aiding using range beacons
-                posResetSource = RNGBCN;
-                velResetSource = DEFAULT;
+                posResetSource = resetDataSource::RNGBCN;
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u is using range beacons",(unsigned)imu_index);
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u initial pos NE = %3.1f,%3.1f (m)",(unsigned)imu_index,(double)receiverPos.x,(double)receiverPos.y);
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u initial beacon pos D offset = %3.1f (m)",(unsigned)imu_index,(double)bcnPosOffsetNED.z);
             } else if (readyToUseExtNav()) {
                 // we are commencing aiding using external nav
-                posResetSource = EXTNAV;
+                posResetSource = resetDataSource::EXTNAV;
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u is using external nav data",(unsigned)imu_index);
                 gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u initial pos NED = %3.1f,%3.1f,%3.1f (m)",(unsigned)imu_index,(double)extNavDataDelayed.pos.x,(double)extNavDataDelayed.pos.y,(double)extNavDataDelayed.pos.z);
                 if (useExtNavVel) {
-                    velResetSource = EXTNAV;
+                    velResetSource = resetDataSource::EXTNAV;
                     gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u initial vel NED = %3.1f,%3.1f,%3.1f (m/s)",(unsigned)imu_index,(double)extNavVelDelayed.vel.x,(double)extNavVelDelayed.vel.y,(double)extNavVelDelayed.vel.z);
-                } else {
-                    velResetSource = DEFAULT;
                 }
                 // handle height reset as special case
                 hgtMea = -extNavDataDelayed.pos.z;
@@ -396,8 +396,8 @@ void NavEKF3_core::setAidingMode()
         }
 
         // Always reset the position and velocity when changing mode
-        ResetVelocity();
-        ResetPosition();
+        ResetVelocity(velResetSource);
+        ResetPosition(posResetSource);
 
     }
 
@@ -448,12 +448,11 @@ bool NavEKF3_core::readyToUseOptFlow(void) const
 // return true if the filter is ready to start using body frame odometry measurements
 bool NavEKF3_core::readyToUseBodyOdm(void) const
 {
-
     // Check for fresh visual odometry data that meets the accuracy required for alignment
     bool visoDataGood = (imuSampleTime_ms - bodyOdmMeasTime_ms < 200) && (bodyOdmDataNew.velErr < 1.0f);
 
     // Check for fresh wheel encoder data
-    bool wencDataGood = (imuSampleTime_ms - wheelOdmMeasTime_ms < 200);
+    bool wencDataGood = (imuDataDelayed.time_ms - wheelOdmDataDelayed.time_ms < 200);
 
     // We require stable roll/pitch angles and gyro bias estimates but do not need the yaw angle aligned to use odometry measurements
     // because they are in a body frame of reference

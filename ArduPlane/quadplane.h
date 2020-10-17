@@ -11,6 +11,7 @@
 #include <AC_Avoidance/AC_Avoid.h>
 #include <AP_Proximity/AP_Proximity.h>
 #include "qautotune.h"
+#include "defines.h"
 
 /*
   QuadPlane specific functionality
@@ -24,9 +25,12 @@ public:
     friend class AP_AdvancedFailsafe_Plane;
     friend class QAutoTune;
     friend class AP_Arming_Plane;
+    friend class RC_Channel_Plane;
+    friend class RC_Channel;
 
     friend class Mode;
     friend class ModeAuto;
+    friend class ModeRTL;
     friend class ModeAvoidADSB;
     friend class ModeGuided;
     friend class ModeQHover;
@@ -91,6 +95,7 @@ public:
     bool in_vtol_mode(void) const;
     bool in_vtol_posvel_mode(void) const;
     void update_throttle_hover();
+    bool show_vtol_view() const;
 
     // vtol help for is_flying()
     bool is_flying(void);
@@ -154,6 +159,7 @@ public:
         int16_t  climb_rate;
         float    throttle_mix;
         float    speed_scaler;
+        uint8_t  transition_state;
     };
 
     MAV_TYPE get_mav_type(void) const;
@@ -187,6 +193,9 @@ private:
 
     // vertical acceleration the pilot may request
     AP_Int16 pilot_accel_z;
+
+     // air mode state: OFF, ON
+    AirMode air_mode;
 
     // check for quadplane assistance needed
     bool assistance_needed(float aspeed, bool have_airspeed);
@@ -556,6 +565,10 @@ private:
         OPTION_IDLE_GOV_MANUAL=(1<<6),
         OPTION_Q_ASSIST_FORCE_ENABLE=(1<<7),
         OPTION_TAILSIT_Q_ASSIST_MOTORS_ONLY=(1<<8),
+        OPTION_AIRMODE=(1<<9),
+        OPTION_DISARMED_TILT=(1<<10),
+        OPTION_DELAY_ARMING=(1<<11),
+        OPTION_DISABLE_SYNTHETIC_AIRSPEED_ASSIST=(1<<12),
     };
 
     AP_Float takeoff_failure_scalar;
@@ -564,6 +577,11 @@ private:
     uint32_t takeoff_time_limit_ms;
 
     float last_land_final_agl;
+
+
+    // oneshot with duration ARMING_DELAY_MS used by quadplane to delay spoolup after arming:
+    // ignored unless OPTION_DELAY_ARMING or OPTION_TILT_DISARMED is set
+    bool delay_arming;
 
     /*
       return true if current mission item is a vtol takeoff

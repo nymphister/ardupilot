@@ -171,10 +171,8 @@ public:
     // Methods
     virtual void update(bool skip_ins_update=false) = 0;
 
-    // report any reason for why the backend is refusing to initialise
-    virtual const char *prearm_failure_reason(void) const {
-        return nullptr;
-    }
+    // returns false if we fail arming checks, in which case the buffer will be populated with a failure message
+    virtual bool pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const = 0;
 
     // check all cores providing consistent attitudes for prearm checks
     virtual bool attitudes_consistent(char *failure_msg, const uint8_t failure_msg_len) const { return true; }
@@ -210,6 +208,11 @@ public:
     // return a smoothed and corrected gyro vector in radians/second
     virtual const Vector3f &get_gyro(void) const = 0;
 
+    // return primary accels, for lua
+    const Vector3f &get_accel(void) const {
+        return AP::ins().get_accel();
+    }
+    
     // return a smoothed and corrected gyro vector in radians/second using the latest ins data (which may not have been consumed by the EKF yet)
     Vector3f get_gyro_latest(void) const;
 
@@ -260,7 +263,7 @@ public:
 
     // return an airspeed estimate if available. return true
     // if we have an estimate
-    virtual bool airspeed_estimate(float &airspeed_ret) const WARN_IF_UNUSED;
+    virtual bool airspeed_estimate(float &airspeed_ret) const WARN_IF_UNUSED = 0;
 
     // return a true airspeed estimate (navigation airspeed) if
     // available. return true if we have an estimate
@@ -272,6 +275,12 @@ public:
         return true;
     }
 
+    // return a synthetic airspeed estimate (one derived from sensors
+    // other than an actual airspeed sensor), if available. return
+    // true if we have a synthetic airspeed.  ret will not be modified
+    // on failure.
+    virtual bool synthetic_airspeed(float &ret) const WARN_IF_UNUSED = 0;
+
     // get apparent to true airspeed ratio
     float get_EAS2TAS(void) const;
 
@@ -279,6 +288,12 @@ public:
     // opposed to an IMU estimate
     bool airspeed_sensor_enabled(void) const {
         return _airspeed != nullptr && _airspeed->use() && _airspeed->healthy();
+    }
+
+    // return true if airspeed comes from a specific airspeed sensor, as
+    // opposed to an IMU estimate
+    bool airspeed_sensor_enabled(uint8_t airspeed_index) const {
+        return _airspeed != nullptr && _airspeed->use(airspeed_index) && _airspeed->healthy(airspeed_index);
     }
 
     // return the parameter AHRS_WIND_MAX in metres per second
@@ -464,8 +479,6 @@ public:
 
     // is the AHRS subsystem healthy?
     virtual bool healthy(void) const = 0;
-
-    virtual bool prearm_healthy(void) const { return healthy(); }
 
     // true if the AHRS has completed initialisation
     virtual bool initialised(void) const {

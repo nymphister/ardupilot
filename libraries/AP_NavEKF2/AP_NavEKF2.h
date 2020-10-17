@@ -61,8 +61,9 @@ public:
     
     // Check basic filter health metrics and return a consolidated health status
     bool healthy(void) const;
-    // Ensure that all started cores are considered healthy
-    bool all_cores_healthy(void) const;
+
+    // returns false if we fail arming checks, in which case the buffer will be populated with a failure message
+    bool pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const;
 
     // returns the index of the primary core
     // return -1 if no primary core selected
@@ -313,9 +314,6 @@ public:
     // returns the time of the last reset or 0 if no reset has ever occurred
     uint32_t getLastPosDownReset(float &posDelta);
 
-    // report any reason for why the backend is refusing to initialise
-    const char *prearm_failure_reason(void) const;
-
     // set and save the _baroAltNoise parameter
     void set_baro_alt_noise(float noise) { _baroAltNoise.set_and_save(noise); };
 
@@ -557,6 +555,10 @@ private:
     // old_primary - index of the ekf instance that we are currently using as the primary
     void updateLaneSwitchPosDownResetData(uint8_t new_primary, uint8_t old_primary);
 
+    // return true if a new core has a better score than an existing core, including
+    // checks for alignment
+    bool coreBetterScore(uint8_t new_core, uint8_t current_core);
+    
     // logging functions shared by cores:
     void Log_Write_NKF1(uint8_t core, uint64_t time_us) const;
     void Log_Write_NKF2(uint8_t core, uint64_t time_us) const;

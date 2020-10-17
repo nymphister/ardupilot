@@ -41,25 +41,7 @@ using namespace SITL;
  */
 
 Aircraft::Aircraft(const char *frame_str) :
-    ground_level(0.0f),
-    frame_height(0.0f),
-    dcm(),
-    gyro(),
-    velocity_ef(),
-    mass(0.0f),
-    accel_body(0.0f, 0.0f, -GRAVITY_MSS),
-    time_now_us(0),
-    gyro_noise(radians(0.1f)),
-    accel_noise(0.3f),
-    rate_hz(1200.0f),
-    autotest_dir(nullptr),
-    frame(frame_str),
-    num_motors(1),
-#if defined(__CYGWIN__) || defined(__CYGWIN64__)
-    min_sleep_time(20000)
-#else
-    min_sleep_time(5000)
-#endif
+    frame(frame_str)
 {
     // make the SIM_* variables available to simulator backends
     sitl = AP::sitl();
@@ -67,7 +49,6 @@ Aircraft::Aircraft(const char *frame_str) :
     set_speedup(1.0f);
 
     last_wall_time_us = get_wall_time_us();
-    frame_counter = 0;
 
     // allow for orientation settings, such as with tailsitters
     enum ap_var_type ptype;
@@ -83,6 +64,11 @@ Aircraft::Aircraft(const char *frame_str) :
     }
 
     terrain = &AP::terrain();
+
+    // init rangefinder array to -1 to signify no data
+    for (uint8_t i = 0; i < RANGEFINDER_MAX_INSTANCES; i++){
+        rangefinder_m[i] = -1.0f;
+    }
 }
 
 void Aircraft::set_start_location(const Location &start_loc, const float start_yaw)
@@ -274,12 +260,14 @@ void Aircraft::sync_frame_time(void)
     uint32_t now_ms = last_wall_time_us / 1000ULL;
     float dt_wall = (now_ms - last_fps_report_ms) * 0.001;
     if (dt_wall > 2.0) {
+#if 0
         const float achieved_rate_hz = (frame_counter - last_frame_count) / dt_wall;
-        last_frame_count = frame_counter;
-        last_fps_report_ms = now_ms;
         ::printf("Rate: target:%.1f achieved:%.1f speedup %.1f/%.1f\n",
                  rate_hz*target_speedup, achieved_rate_hz,
                  achieved_rate_hz/rate_hz, target_speedup);
+#endif
+        last_frame_count = frame_counter;
+        last_fps_report_ms = now_ms;
     }
 }
 
@@ -374,6 +362,12 @@ void Aircraft::fill_fdm(struct sitl_fdm &fdm)
     fdm.scanner.points = scanner.points;
     fdm.scanner.ranges = scanner.ranges;
 
+    // copy rangefinder
+    memcpy(fdm.rangefinder_m, rangefinder_m, sizeof(fdm.rangefinder_m));
+
+    fdm.wind_vane_apparent.direction = wind_vane_apparent.direction;
+    fdm.wind_vane_apparent.speed = wind_vane_apparent.speed;
+
     if (is_smoothed) {
         fdm.xAccel = smoothing.accel_body.x;
         fdm.yAccel = smoothing.accel_body.y;
@@ -424,12 +418,55 @@ void Aircraft::fill_fdm(struct sitl_fdm &fdm)
             fdm.quaternion.from_rotation_matrix(m);
         }
     }
+
+    // in the first call here, if a speedup option is specified, overwrite it
+    if (is_equal(last_speedup, -1.0f) && !is_equal(get_speedup(), 1.0f)) {
+        sitl->speedup = get_speedup();
+    }
     
     if (!is_equal(last_speedup, float(sitl->speedup)) && sitl->speedup > 0) {
         set_speedup(sitl->speedup);
         last_speedup = sitl->speedup;
     }
 }
+
+float Aircraft::rangefinder_range() const
+{
+    // swiped from sitl_rangefinder.cpp - we should unify them at some stage
+
+    float altitude = range;  // only sub appears to set this
+    if (is_equal(altitude, -1.0f)) {  // Use SITL altitude as reading by default
+        altitude = sitl->height_agl;
+    }
+
+    // sensor position offset in body frame
+    const Vector3f relPosSensorBF = sitl->rngfnd_pos_offset;
+
+    // adjust altitude for position of the sensor on the vehicle if position offset is non-zero
+    if (!relPosSensorBF.is_zero()) {
+        // get a rotation matrix following DCM conventions (body to earth)
+        Matrix3f rotmat;
+        sitl->state.quaternion.rotation_matrix(rotmat);
+        // rotate the offset into earth frame
+        const Vector3f relPosSensorEF = rotmat * relPosSensorBF;
+        // correct the altitude at the sensor
+        altitude -= relPosSensorEF.z;
+    }
+
+    // If the attidude is non reversed for SITL OR we are using rangefinder from external simulator,
+    // We adjust the reading with noise, glitch and scaler as the reading is on analog port.
+    if ((fabs(sitl->state.rollDeg) < 90.0 && fabs(sitl->state.pitchDeg) < 90.0) || !is_equal(range, -1.0f)) {
+        if (is_equal(range, -1.0f)) {  // disable for external reading that already handle this
+            // adjust for apparent altitude with roll
+            altitude /= cosf(radians(sitl->state.rollDeg)) * cosf(radians(sitl->state.pitchDeg));
+        }
+        // Add some noise on reading
+        altitude += sitl->sonar_noise * rand_float();
+    }
+
+    return altitude;
+}
+
 
 uint64_t Aircraft::get_wall_time_us() const
 {
@@ -809,6 +846,11 @@ void Aircraft::update_external_payload(const struct sitl_input &input)
     if (sprayer && sprayer->is_enabled()) {
         sprayer->update(input);
         external_payload_mass += sprayer->payload_mass();
+    }
+
+    // update i2c
+    if (i2c) {
+        i2c->update(*this);
     }
 
     // update buzzer

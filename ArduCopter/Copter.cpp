@@ -146,7 +146,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
     SCHED_TASK(lost_vehicle_check,    10,     50),
     SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_receive, 400, 180),
     SCHED_TASK_CLASS(GCS,                  (GCS*)&copter._gcs,          update_send,    400, 550),
-#if MOUNT == ENABLED
+#if HAL_MOUNT_ENABLED
     SCHED_TASK_CLASS(AP_Mount,             &copter.camera_mount,        update,          50,  75),
 #endif
 #if CAMERA == ENABLED
@@ -166,7 +166,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
     SCHED_TASK(compass_cal_update,   100,    100),
     SCHED_TASK(accel_cal_update,      10,    100),
     SCHED_TASK_CLASS(AP_TempCalibration,   &copter.g2.temp_calibration, update,          10, 100),
-#if ADSB_ENABLED == ENABLED
+#if HAL_ADSB_ENABLED
     SCHED_TASK(avoidance_adsb_update, 10,    100),
 #endif
 #if ADVANCED_FAILSAFE == ENABLED
@@ -179,7 +179,7 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
     SCHED_TASK_CLASS(AP_Gripper,           &copter.g2.gripper,          update,          10,  75),
 #endif
 #if WINCH_ENABLED == ENABLED
-    SCHED_TASK(winch_update,          10,     50),
+    SCHED_TASK_CLASS(AP_Winch,             &copter.g2.winch,            update,          50,  50),
 #endif
 #if GENERATOR_ENABLED
     SCHED_TASK_CLASS(AP_Generator_RichenPower,     &copter.generator,      update,    10,     50),
@@ -260,7 +260,7 @@ void Copter::fast_loop()
     // check if we've landed or crashed
     update_land_and_crash_detectors();
 
-#if MOUNT == ENABLED
+#if HAL_MOUNT_ENABLED
     // camera mount's fast update
     camera_mount.update_fast();
 #endif
@@ -426,6 +426,11 @@ void Copter::ten_hz_logging_loop()
 #if FRAME_CONFIG == HELI_FRAME
     Log_Write_Heli();
 #endif
+#if WINCH_ENABLED == ENABLED
+    if (should_log(MASK_LOG_ANY)) {
+        g2.winch.write_log();
+    }
+#endif
 }
 
 // twentyfive_hz_logging - should be run at 25hz
@@ -508,7 +513,7 @@ void Copter::one_hz_loop()
     // log terrain data
     terrain_logging();
 
-#if ADSB_ENABLED == ENABLED
+#if HAL_ADSB_ENABLED
     adsb.set_is_flying(!ap.land_complete);
 #endif
 

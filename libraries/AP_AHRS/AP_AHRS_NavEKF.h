@@ -200,7 +200,8 @@ public:
     // is the AHRS subsystem healthy?
     bool healthy() const override;
 
-    bool prearm_healthy() const override;
+    // returns false if we fail arming checks, in which case the buffer will be populated with a failure message
+    bool pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const override;
 
     // true if the AHRS has completed initialisation
     bool initialised() const override;
@@ -211,9 +212,6 @@ public:
     // get compass offset estimates
     // true if offsets are valid
     bool getMagOffsets(uint8_t mag_idx, Vector3f &magOffsets) const;
-
-    // report any reason for why the backend is refusing to initialise
-    const char *prearm_failure_reason(void) const override;
 
     // check all cores providing consistent attitudes for prearm checks
     bool attitudes_consistent(char *failure_msg, const uint8_t failure_msg_len) const override;
@@ -285,6 +283,13 @@ public:
 
     // is the EKF backend doing its own sensor logging?
     bool have_ekf_logging(void) const override;
+
+    // return the index of the airspeed we should use for airspeed measurements
+    // with multiple airspeed sensors and airspeed affinity in EKF3, it is possible to have switched
+    // over to a lane not using the primary airspeed sensor, so AHRS should know which airspeed sensor
+    // to use, i.e, the one being used by the primary lane. A lane switch could have happened due to an 
+    // airspeed sensor fault, which makes this even more necessary
+    uint8_t get_active_airspeed_index() const;
 
     // return the index of the primary core or -1 if no primary core selected
     int8_t get_primary_core_index() const override;

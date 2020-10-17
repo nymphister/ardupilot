@@ -21,11 +21,12 @@
 #include <AP_HAL/AP_HAL.h>
 #include "AP_AHRS.h"
 #include "AP_AHRS_View.h"
-#include <AP_Vehicle/AP_Vehicle.h>
-#include <GCS_MAVLink/GCS.h>
 #include <AP_Module/AP_Module.h>
 #include <AP_GPS/AP_GPS.h>
 #include <AP_Baro/AP_Baro.h>
+#include <AP_InternalError/AP_InternalError.h>
+#include <AP_Notify/AP_Notify.h>
+#include <AP_Vehicle/AP_Vehicle_Type.h>
 
 #if AP_AHRS_NAVEKF_AVAILABLE
 
@@ -543,7 +544,7 @@ Vector3f AP_AHRS_NavEKF::wind_estimate(void) const
 // if we have an estimate
 bool AP_AHRS_NavEKF::airspeed_estimate(float &airspeed_ret) const
 {
-    return AP_AHRS_DCM::airspeed_estimate(airspeed_ret);
+    return AP_AHRS_DCM::airspeed_estimate(get_active_airspeed_index(), airspeed_ret);
 }
 
 // true if compass is being used
@@ -1248,11 +1249,15 @@ AP_AHRS_NavEKF::EKFType AP_AHRS_NavEKF::active_EKF_type(void) const
             get_filter_status(filt_state);
         }
 #endif
-        if (hal.util->get_soft_armed() && !filt_state.flags.using_gps && AP::gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
-            // if the EKF is not fusing GPS and we have a 3D lock, then
-            // plane and rover would prefer to use the GPS position from
-            // DCM. This is a safety net while some issues with the EKF
-            // get sorted out
+        if (hal.util->get_soft_armed() &&
+            (!filt_state.flags.using_gps ||
+             !filt_state.flags.horiz_pos_abs) &&
+            AP::gps().status() >= AP_GPS::GPS_OK_FIX_3D) {
+            // if the EKF is not fusing GPS or doesn't have a 2D fix
+            // and we have a 3D lock, then plane and rover would
+            // prefer to use the GPS position from DCM. This is a
+            // safety net while some issues with the EKF get sorted
+            // out
             return EKFType::NONE;
         }
         if (hal.util->get_soft_armed() && filt_state.flags.const_pos_mode) {
@@ -1339,34 +1344,42 @@ bool AP_AHRS_NavEKF::healthy(void) const
     return AP_AHRS_DCM::healthy();
 }
 
-bool AP_AHRS_NavEKF::prearm_healthy(void) const
+// returns false if we fail arming checks, in which case the buffer will be populated with a failure message
+bool AP_AHRS_NavEKF::pre_arm_check(char *failure_msg, uint8_t failure_msg_len) const
 {
-    bool prearm_health = false;
     switch (ekf_type()) {
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     case EKFType::SITL:
 #endif
     case EKFType::NONE:
-        prearm_health = true;
-        break;
+        if (!healthy()) {
+            hal.util->snprintf(failure_msg, failure_msg_len, "Not healthy");
+            return false;
+        }
+        return true;
 
 #if HAL_NAVEKF2_AVAILABLE
     case EKFType::TWO:
-        if (_ekf2_started && EKF2.all_cores_healthy()) {
-            prearm_health = true;
+        if (!_ekf2_started) {
+            hal.util->snprintf(failure_msg, failure_msg_len, "EKF2 not started");
+            return false;
         }
-        break;
+        return EKF2.pre_arm_check(failure_msg, failure_msg_len);
 #endif
 
 #if HAL_NAVEKF3_AVAILABLE
     case EKFType::THREE:
-        if (_ekf3_started && EKF3.all_cores_healthy()) {
-            prearm_health = true;
+        if (!_ekf3_started) {
+            hal.util->snprintf(failure_msg, failure_msg_len, "EKF3 not started");
+            return false;
         }
-        break;
+        return EKF3.pre_arm_check(failure_msg, failure_msg_len);
 #endif
     }
-   return prearm_health && healthy();
+
+    // if we get here then ekf type is invalid
+    hal.util->snprintf(failure_msg, failure_msg_len, "invalid EKF type");
+    return false;
 }
 
 void AP_AHRS_NavEKF::set_ekf_use(bool setting)
@@ -1610,32 +1623,6 @@ void AP_AHRS_NavEKF::getCorrectedDeltaVelocityNED(Vector3f& ret, float& dt) cons
     ret -= accel_bias*dt;
     ret = _dcm_matrix * get_rotation_autopilot_body_to_vehicle_body() * ret;
     ret.z += GRAVITY_MSS*dt;
-}
-
-// report any reason for why the backend is refusing to initialise
-const char *AP_AHRS_NavEKF::prearm_failure_reason(void) const
-{
-    switch (ekf_type()) {
-    case EKFType::NONE:
-        return nullptr;
-
-#if HAL_NAVEKF2_AVAILABLE
-    case EKFType::TWO:
-        return EKF2.prearm_failure_reason();
-#endif
-
-#if HAL_NAVEKF3_AVAILABLE
-    case EKFType::THREE:
-        return EKF3.prearm_failure_reason();
-#endif
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-    case EKFType::SITL:
-        return nullptr;
-#endif
-    }
-
-    return nullptr;
 }
 
 // check all cores providing consistent attitudes for prearm checks
@@ -2153,6 +2140,22 @@ bool AP_AHRS_NavEKF::have_ekf_logging(void) const
     }
     // since there is no default case above, this is unreachable
     return false;
+}
+
+//get the index of the active airspeed sensor, wrt the primary core
+uint8_t AP_AHRS_NavEKF::get_active_airspeed_index() const
+{
+// we only have affinity for EKF3 as of now
+#if HAL_NAVEKF3_AVAILABLE
+    if (active_EKF_type() == EKFType::THREE) {
+        return EKF3.getActiveAirspeed(get_primary_core_index());   
+    }
+#endif
+    // for the rest, let the primary airspeed sensor be used
+    if (_airspeed != nullptr) {
+        return _airspeed->get_primary();
+    }
+    return 0;
 }
 
 // get the index of the current primary IMU

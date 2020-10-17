@@ -86,7 +86,7 @@ private:
     bool _check_whoami();
 
     void _set_filter_register(void);
-    void _fifo_reset();
+    void _fifo_reset(bool log_error);
     bool _has_auxiliary_bus();
 
     /* Read samples from FIFO (FIFO enabled) */
@@ -125,6 +125,8 @@ private:
     float _fifo_accel_scale;
     float _fifo_gyro_scale;
     LowPassFilter2pFloat _temp_filter;
+    uint32_t last_reset_ms;
+    uint8_t reset_count;
 
     enum Rotation _rotation;
 
@@ -169,7 +171,6 @@ private:
         uint8_t accel_count;
         uint8_t gyro_count;
         LowPassFilterVector3f accel_filter{4000, 188};
-        LowPassFilterVector3f gyro_filter{8000, 188};
     } _accum;
 };
 

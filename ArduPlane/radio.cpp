@@ -40,6 +40,10 @@ void Plane::set_control_channels(void)
         SRV_Channels::set_angle(SRV_Channel::k_throttleRight, 100);
     }
 
+    // update flap and airbrake channel assignment
+    channel_flap     = rc().find_channel_for_option(RC_Channel::AUX_FUNC::FLAP);
+    channel_airbrake = rc().find_channel_for_option(RC_Channel::AUX_FUNC::AIRBRAKE);
+
     // update manual forward throttle channel assignment
     quadplane.rc_fwd_thr_ch = rc().find_channel_for_option(RC_Channel::AUX_FUNC::FWD_THR);
 
@@ -285,7 +289,7 @@ void Plane::control_failsafe()
         }
     }
 
-    if(g.throttle_fs_enabled == 0) {
+    if (ThrFailsafe(g.throttle_fs_enabled.get()) != ThrFailsafe::Enabled) {
         return;
     }
 
@@ -378,7 +382,7 @@ bool Plane::trim_radio()
  */
 bool Plane::rc_throttle_value_ok(void) const
 {
-    if (!g.throttle_fs_enabled) {
+    if (ThrFailsafe(g.throttle_fs_enabled.get()) == ThrFailsafe::Disabled) {
         return true;
     }
     if (channel_throttle->get_reverse()) {

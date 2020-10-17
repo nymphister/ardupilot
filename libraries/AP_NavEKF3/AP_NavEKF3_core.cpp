@@ -3,7 +3,6 @@
 #include "AP_NavEKF3.h"
 #include "AP_NavEKF3_core.h"
 #include <AP_AHRS/AP_AHRS.h>
-#include <AP_Vehicle/AP_Vehicle.h>
 #include <GCS_MAVLink/GCS.h>
 #include <AP_GPS/AP_GPS.h>
 #include <AP_VisualOdom/AP_VisualOdom.h>
@@ -71,7 +70,7 @@ bool NavEKF3_core::setup_core(uint8_t _imu_index, uint8_t _core_index)
     if (frontend->_fusionModeGPS != 3) {
         // Wait for the configuration of all GPS units to be confirmed. Until this has occurred the GPS driver cannot provide a correct time delay
         float gps_delay_sec = 0;
-        if (!AP::gps().get_lag(gps_delay_sec)) {
+        if (!AP::gps().get_lag(selected_gps, gps_delay_sec)) {
             if (AP_HAL::millis() - lastInitFailReport_ms > 10000) {
                 lastInitFailReport_ms = AP_HAL::millis();
                 // provide an escalating series of messages
@@ -152,7 +151,7 @@ bool NavEKF3_core::setup_core(uint8_t _imu_index, uint8_t _core_index)
         return false;
     }
     // Note: range beacon data is read one beacon at a time and can arrive at a high rate
-    if(!storedRangeBeacon.init(imu_buffer_length)) {
+    if(!storedRangeBeacon.init(imu_buffer_length+1)) {
         return false;
     }
     if (!storedExtNav.init(extnav_buffer_length)) {
@@ -167,7 +166,7 @@ bool NavEKF3_core::setup_core(uint8_t _imu_index, uint8_t _core_index)
     if(!storedOutput.init(imu_buffer_length)) {
         return false;
     }
-    gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u buffs IMU=%u OBS=%u OF=%u EN:%u, dt=%.4f",
+    gcs().send_text(MAV_SEVERITY_INFO, "EKF3 IMU%u buffs IMU=%u OBS=%u OF=%u EN:%u dt=%.4f",
                     (unsigned)imu_index,
                     (unsigned)imu_buffer_length,
                     (unsigned)obs_buffer_length,
@@ -352,11 +351,8 @@ void NavEKF3_core::InitialiseVariables()
     velOffsetNED.zero();
     posOffsetNED.zero();
     memset(&velPosObs, 0, sizeof(velPosObs));
-    posResetSource = DEFAULT;
-    velResetSource = DEFAULT;
 
     // range beacon fusion variables
-    memset((void *)&rngBcnDataNew, 0, sizeof(rngBcnDataNew));
     memset((void *)&rngBcnDataDelayed, 0, sizeof(rngBcnDataDelayed));
     rngBcnStoreIndex = 0;
     lastRngBcnPassTime_ms = 0;
@@ -405,8 +401,6 @@ void NavEKF3_core::InitialiseVariables()
     bodyOdmMeasTime_ms = 0;
     bodyVelFusionDelayed = false;
     bodyVelFusionActive = false;
-    usingWheelSensors = false;
-    wheelOdmMeasTime_ms = 0;
 
     // yaw sensor fusion
     yawMeasTime_ms = 0;
@@ -419,7 +413,6 @@ void NavEKF3_core::InitialiseVariables()
     extNavLastPosResetTime_ms = 0;
     extNavDataToFuse = false;
     extNavUsedForPos = false;
-    extNavVelNew = {};
     extNavVelDelayed = {};
     extNavVelToFuse = false;
     useExtNavVel = false;
@@ -490,8 +483,11 @@ after the tilt has stabilised.
 */
 bool NavEKF3_core::InitialiseFilterBootstrap(void)
 {
+    // update sensor selection (for affinity)
+    update_sensor_selection();
+
     // If we are a plane and don't have GPS lock then don't initialise
-    if (assume_zero_sideslip() && AP::gps().status() < AP_GPS::GPS_OK_FIX_3D) {
+    if (assume_zero_sideslip() && AP::gps().status(preferred_gps) < AP_GPS::GPS_OK_FIX_3D) {
         hal.util->snprintf(prearm_fail_string,
                     sizeof(prearm_fail_string),
                     "EKF3 init failure: No GPS lock");
@@ -556,8 +552,8 @@ bool NavEKF3_core::InitialiseFilterBootstrap(void)
     stateStruct.body_magfield.zero();
 
     // set the position, velocity and height
-    ResetVelocity();
-    ResetPosition();
+    ResetVelocity(resetDataSource::DEFAULT);
+    ResetPosition(resetDataSource::DEFAULT);
     ResetHeight();
 
     // define Earth rotation vector in the NED navigation frame
@@ -652,6 +648,9 @@ void NavEKF3_core::UpdateFilter(bool predict)
     hal.util->perf_begin(_perf_UpdateFilter);
 
     fill_scratch_variables();
+
+    // update sensor selection (for affinity)
+    update_sensor_selection();
 
     // TODO - in-flight restart method
 
@@ -1023,12 +1022,28 @@ void NavEKF3_core::CovariancePrediction()
         }
     }
 
+    if (!inhibitMagStates && lastInhibitMagStates) {
+        // when starting 3D fusion we want to reset body mag variances
+        needMagBodyVarReset = true;
+    }
+
+    if (needMagBodyVarReset) {
+        // reset body mag variances
+        needMagBodyVarReset = false;
+        zeroCols(P,19,21);
+        zeroRows(P,19,21);
+        P[19][19] = sq(frontend->_magNoise);
+        P[20][20] = P[19][19];
+        P[21][21] = P[19][19];
+    }
+
     if (!inhibitMagStates) {
         float magEarthVar = sq(dt * constrain_float(frontend->_magEarthProcessNoise, 0.0f, 1.0f));
         float magBodyVar  = sq(dt * constrain_float(frontend->_magBodyProcessNoise, 0.0f, 1.0f));
         for (uint8_t i=6; i<=8; i++) processNoiseVariance[i] = magEarthVar;
         for (uint8_t i=9; i<=11; i++) processNoiseVariance[i] = magBodyVar;
     }
+    lastInhibitMagStates = inhibitMagStates;
 
     if (!inhibitWindStates) {
         float windVelVar  = sq(dt * constrain_float(frontend->_windVelProcessNoise, 0.0f, 1.0f) * (1.0f + constrain_float(frontend->_wndVarHgtRateScale, 0.0f, 1.0f) * fabsf(hgtRate)));
@@ -1727,9 +1742,6 @@ void NavEKF3_core::resetMagFieldStates()
     P[19][19] = P[18][18];
     P[20][20] = P[18][18];
     P[21][21] = P[18][18];
-
-    // prevent reset of variances in ConstrainVariances()
-    inhibitMagStates = false;
 
     // record the fact we have initialised the magnetic field states
     recordMagReset();
