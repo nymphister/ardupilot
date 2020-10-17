@@ -464,15 +464,15 @@ static const ap_message STREAM_RAW_SENSORS_msgs[] = {
 static const ap_message STREAM_EXTENDED_STATUS_msgs[] = {
     MSG_SYS_STATUS,
     MSG_POWER_STATUS,
-    MSG_MEMINFO,
-    MSG_CURRENT_WAYPOINT,
+    //  MSG_MEMINFO,           //  20201017, nymphister removed
+    //  MSG_CURRENT_WAYPOINT,  
     MSG_GPS_RAW,
-    MSG_GPS_RTK,
-    MSG_GPS2_RAW,
-    MSG_GPS2_RTK,
+    //  MSG_GPS_RTK,           //  20201017, nymphister removed
+    //  MSG_GPS2_RAW,          
+    //  MSG_GPS2_RTK,          
     MSG_NAV_CONTROLLER_OUTPUT,
-    MSG_FENCE_STATUS,
-    MSG_POSITION_TARGET_GLOBAL_INT,
+    //  MSG_FENCE_STATUS,      //  20201017, nymphister removed
+    //  MSG_POSITION_TARGET_GLOBAL_INT,
 };
 static const ap_message STREAM_POSITION_msgs[] = {
     MSG_LOCATION,
@@ -488,9 +488,11 @@ static const ap_message STREAM_RC_CHANNELS_msgs[] = {
 };
 static const ap_message STREAM_EXTRA1_msgs[] = {
     MSG_ATTITUDE,
-    MSG_SIMSTATE,
-    MSG_AHRS2,
+    //  MSG_SIMSTATE,          //  20201017, nymphister removed
+    //  MSG_AHRS2,
     MSG_PID_TUNING,
+    MSG_WIND,                  //  20201017, nymphister added from EXTRA 3 stream
+    MSG_BATTERY_STATUS,
 };
 static const ap_message STREAM_EXTRA2_msgs[] = {
     MSG_VFR_HUD
@@ -498,12 +500,12 @@ static const ap_message STREAM_EXTRA2_msgs[] = {
 static const ap_message STREAM_EXTRA3_msgs[] = {
     MSG_AHRS,
     MSG_HWSTATUS,
-    MSG_WIND,
+    //  MSG_WIND,              //  20201017, nymphister removed
     MSG_RANGEFINDER,
     MSG_DISTANCE_SENSOR,
     MSG_SYSTEM_TIME,
     MSG_BATTERY2,
-    MSG_BATTERY_STATUS,
+    //  MSG_BATTERY_STATUS,    //  20201017, nymphister removed
     MSG_MOUNT_STATUS,
     MSG_MAG_CAL_REPORT,
     MSG_MAG_CAL_PROGRESS,
